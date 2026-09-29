@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: realworld
+  labels:
+    # Pod Security Admission: rejeita pods fora do perfil "restricted"
+    # (root, privilege escalation, capabilities extras, sem seccomp...).
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted

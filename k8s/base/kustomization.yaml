@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: realworld
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: realworld
+    includeSelectors: false
+
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - api-hpa.yaml
+  - api-pdb.yaml
+  - networkpolicy.yaml
+
+# Configuração não sensível. O generator acrescenta um hash ao nome do ConfigMap:
+# mudar um valor gera um nome novo e o Deployment faz rollout sozinho.
+configMapGenerator:
+  - name: api-config
+    literals:
+      - NODE_ENV=production
+      - PORT=3000
+      - LOG_LEVEL=info
+      - SERVICE_NAME=realworld-api
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=realworld
+      - POSTGRES_USER=realworld
+
+# Nome lógico da imagem; cada overlay (ou o pipeline) define registry e tag.
+images:
+  - name: realworld-api
+    newName: ghcr.io/laertegf/unecont-devops-azure
+    newTag: main

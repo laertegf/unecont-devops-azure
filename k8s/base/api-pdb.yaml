@@ -1,0 +1,10 @@
+# Em manutenção de nó (drain), nunca ficar com menos de 1 réplica da API.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: realworld-api

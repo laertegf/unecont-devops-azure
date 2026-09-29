@@ -1,0 +1,15 @@
+# Cluster local: 1 control-plane + 2 workers.
+# Dois workers para que o topologySpreadConstraints espalhe as réplicas da API por nós
+# diferentes, como seria num cluster real (perder um nó não derruba a API).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: realworld
+nodes:
+  - role: control-plane
+    # NodePort 30080 do Service da API exposto em http://localhost:8080
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+  - role: worker
+  - role: worker

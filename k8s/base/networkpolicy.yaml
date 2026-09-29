@@ -1,0 +1,18 @@
+# O banco só aceita conexão vinda dos pods da API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-from-api-only
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: realworld-api
+      ports:
+        - protocol: TCP
+          port: 5432

@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    app.kubernetes.io/name: realworld-api
+spec:
+  replicas: 2 # ponto de partida; depois quem controla é o HPA (mínimo 2)
+  revisionHistoryLimit: 5 # histórico usado pelo "kubectl rollout undo"
+  # Rolling update sem perder capacidade: sobe 1 pod novo, espera ficar Ready, só então remove 1 antigo.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: realworld-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: realworld-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: /metrics
+    spec:
+      automountServiceAccountToken: false # a API não conversa com o apiserver
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000 # usuário "node" da imagem
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Réplicas em nós diferentes sempre que possível.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: realworld-api
+
+      # Migração antes da API subir. É idempotente e o Prisma usa advisory lock no Postgres,
+      # então várias réplicas iniciando juntas não aplicam a mesma migração duas vezes.
+      # Enquanto o banco não responde, o initContainer falha e o kubelet tenta de novo.
+      initContainers:
+        - name: migrate
+          image: realworld-api
+          command: ["./node_modules/.bin/prisma", "migrate", "deploy", "--schema", "prisma/schema.prisma"]
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef: { name: api-config, key: POSTGRES_HOST }
+            - name: POSTGRES_DB
+              valueFrom:
+                configMapKeyRef: { name: api-config, key: POSTGRES_DB }
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef: { name: api-config, key: POSTGRES_USER }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: api-secrets, key: POSTGRES_PASSWORD }
+            # $(VAR) é expandido pelo kubelet com as variáveis definidas acima.
+            - name: DATABASE_URL
+              value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):5432/$(POSTGRES_DB)?schema=public
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      containers:
+        - name: api
+          image: realworld-api
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: api-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: api-secrets, key: POSTGRES_PASSWORD }
+            - name: DATABASE_URL
+              value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):5432/$(POSTGRES_DB)?schema=public
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: api-secrets, key: JWT_SECRET }
+
+          # requests definem o agendamento e a base do HPA (utilização = uso / request).
+          # Sem limit de CPU de propósito: limit de CPU causa throttling e latência
+          # mesmo com o nó ocioso. Memória tem limit porque vazamento precisa de teto.
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { memory: 384Mi }
+
+          # startupProbe segura liveness/readiness enquanto a app inicia (até 60s),
+          # sem precisar de initialDelaySeconds grande na liveness.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          # Liveness: processo vivo. Não olha o banco (banco fora não se resolve reiniciando pod).
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Readiness: consegue atender? Checa o banco; se falhar, o pod sai do Service mas não reinicia.
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+
+          # Dá tempo dos endpoints serem removidos antes do SIGTERM, evitando erro durante o rollout.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

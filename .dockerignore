@@ -1,0 +1,11 @@
+# Contexto de build mínimo: menos upload para o daemon, cache mais estável
+# e nenhum risco de .env ou credencial parar dentro da imagem.
+**
+!package.json
+!package-lock.json
+!nx.json
+!project.json
+!tsconfig.json
+!tsconfig.app.json
+!src/**
+src/tests/**

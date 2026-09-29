@@ -1,0 +1,270 @@
+# CI: roda em todo pull request e também é chamado pelo CD antes de publicar a imagem
+# (workflow_call). Assim nada chega ao GHCR sem passar pelas mesmas validações do PR.
+#
+# Jobs em paralelo:
+#   app          build, testes (com Postgres de verdade) e lint do código
+#   infra-lint   Dockerfile, shell scripts, manifests Kubernetes, Compose e os próprios workflows
+#   compose-e2e  builda a imagem, escaneia vulnerabilidades e sobe o docker-compose com smoke test
+#   kind-e2e     sobe um cluster kind, aplica os manifests e testa o deploy.sh (sucesso e rollback)
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+# Um push novo no mesmo PR cancela a execução anterior.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  CI_IMAGE: realworld-api:ci
+
+jobs:
+  app:
+    name: App (build, testes, lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # Parte dos testes do upstream (AuthService) acessa o banco de verdade.
+      # Um Postgres descartável por execução resolve sem mock e sem ambiente compartilhado.
+      postgres:
+        image: postgres:17.11-alpine
+        env:
+          POSTGRES_DB: realworld_test
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci -d realworld_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/realworld_test?schema=public
+      JWT_SECRET: ci-only-secret
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npx prisma generate
+      - run: npx prisma migrate deploy
+
+      - name: Build
+        run: npx nx build api --configuration=production
+
+      - name: Testes unitários
+        run: npx nx test api --ci
+
+      # Código novo (observabilidade e bootstrap) tem que passar no lint.
+      - name: Lint do código novo (bloqueia)
+        run: npx eslint src/main.ts src/app/observability
+
+      # O código herdado do upstream tem erros de lint antigos (any, ts-ignore...).
+      # Eles aparecem no resumo do job, mas não bloqueiam: não é escopo deste teste
+      # reescrever a aplicação, e um CI sempre vermelho perde o valor.
+      - name: Lint completo (informativo)
+        continue-on-error: true
+        run: |
+          npx eslint src --ext .ts -f unix > eslint.txt || true
+          total=$(grep -c ':' eslint.txt || true)
+          {
+            echo "### ESLint (código herdado)"
+            echo "Problemas encontrados: **${total}** (informativo, não bloqueia o PR)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  infra-lint:
+    name: Lint de infraestrutura
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dockerfile (hadolint)
+        uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
+        with:
+          dockerfile: Dockerfile
+
+      - name: Shell scripts (shellcheck)
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
+        with:
+          scandir: ./scripts
+
+      - name: Workflows (actionlint)
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+
+      - name: docker-compose.yml válido
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose --profile observability config --quiet
+
+      - name: Manifests Kubernetes (kustomize + kubeconform)
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
+            | tar -xz kubeconform
+          cp k8s/overlays/kind/secrets.env.example k8s/overlays/kind/secrets.env
+          kubectl kustomize k8s/overlays/kind > rendered.yaml
+          ./kubeconform -strict -summary -kubernetes-version 1.34.0 rendered.yaml
+
+  compose-e2e:
+    name: Imagem + Docker Compose (e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build da imagem
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: ${{ env.CI_IMAGE }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Tamanho da imagem
+        run: docker image ls "$CI_IMAGE" --format 'Imagem {{.Repository}}:{{.Tag}} = {{.Size}}' | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # Falha só em CRITICAL com correção disponível: é o que dá para agir agora.
+      # HIGH aparece no relatório para priorização.
+      - name: Scan de vulnerabilidades (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.CI_IMAGE }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: table
+          exit-code: "0"
+      - name: Trivy (bloqueia em CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.CI_IMAGE }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-setup-trivy: true
+
+      - name: Sobe o Compose (API + Postgres + observabilidade)
+        run: |
+          cp .env.example .env
+          API_IMAGE="$CI_IMAGE" docker compose --profile observability up -d --no-build
+          # "migrate" termina de propósito (exit 0), então espero pela readiness da API em vez de --wait.
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:3000/readyz && exit 0
+            sleep 3
+          done
+          docker compose ps -a; exit 1
+
+      - name: Smoke test
+        run: scripts/smoke-test.sh http://localhost:3000
+
+      - name: Container roda como não-root
+        run: |
+          uid=$(docker compose exec -T api id -u)
+          echo "uid dentro do container: $uid"
+          test "$uid" != "0"
+
+      - name: Logs chegaram no Loki
+        run: |
+          for i in $(seq 1 20); do
+            n=$(curl -fsS -G http://localhost:3100/loki/api/v1/query \
+                  --data-urlencode 'query=count_over_time({service="api"}[10m])' \
+                | grep -o '"value":\[[^]]*\]' | wc -l)
+            [ "$n" -gt 0 ] && { echo "Loki recebeu logs da API"; exit 0; }
+            sleep 5
+          done
+          echo "nenhum log da API no Loki" && exit 1
+
+      - name: Métrica chegou no Prometheus
+        run: |
+          for i in $(seq 1 20); do
+            if curl -fsS 'http://localhost:9090/api/v1/query?query=http_requests_total' | grep -q '"__name__":"http_requests_total"'; then
+              echo "Prometheus coletando http_requests_total"; exit 0
+            fi
+            sleep 5
+          done
+          echo "métrica não encontrada no Prometheus" && exit 1
+
+      - name: Logs do Compose (em caso de falha)
+        if: failure()
+        run: docker compose --profile observability logs --no-color --tail 100
+
+  kind-e2e:
+    name: Kubernetes (kind) e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build da imagem (cache compartilhado com o job do Compose)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: ${{ env.CI_IMAGE }}
+          cache-from: type=gha,scope=api
+
+      - name: Cria cluster kind
+        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          version: v0.33.0
+          config: k8s/kind-cluster.yaml
+          cluster_name: realworld
+
+      - name: Carrega a imagem nos nós
+        run: kind load docker-image "$CI_IMAGE" --name realworld
+
+      - name: Deploy (mesmo script usado localmente)
+        run: |
+          # Aponta o kustomization para a imagem recém-buildada antes de aplicar.
+          sed -i "s|newTag: main|newTag: ci|; s|newName: ghcr.io/.*|newName: realworld-api|" k8s/base/kustomization.yaml
+          scripts/kind-up.sh
+
+      - name: Smoke test via NodePort
+        run: scripts/smoke-test.sh http://localhost:8080
+
+      - name: HPA lendo métricas
+        run: |
+          for i in $(seq 1 24); do
+            cur=$(kubectl -n realworld get hpa api -o jsonpath='{.status.currentMetrics[0].resource.current.averageUtilization}')
+            [ -n "$cur" ] && { echo "HPA ativo: CPU em ${cur}% do request"; exit 0; }
+            sleep 5
+          done
+          kubectl -n realworld describe hpa api; exit 1
+
+      - name: deploy.sh publica uma versão nova
+        run: |
+          docker tag "$CI_IMAGE" realworld-api:ci-v2
+          kind load docker-image realworld-api:ci-v2 --name realworld
+          scripts/deploy.sh realworld-api:ci-v2 -t 180s
+
+      - name: deploy.sh faz rollback de uma imagem quebrada
+        run: |
+          set +e
+          scripts/deploy.sh realworld-api:nao-existe -t 60s
+          rc=$?
+          set -e
+          echo "exit code: $rc (esperado 2 = rollback OK)"
+          test "$rc" -eq 2
+          img=$(kubectl -n realworld get deploy api -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "imagem no ar depois do rollback: $img"
+          test "$img" = "realworld-api:ci-v2"
+
+      - name: Diagnóstico (em caso de falha)
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide
+          kubectl -n realworld describe pods
+          kubectl -n realworld get events --sort-by=.lastTimestamp | tail -40
+          kubectl -n realworld logs deploy/api --all-containers --tail=100 || true

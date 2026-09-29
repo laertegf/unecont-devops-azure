@@ -1,0 +1,5 @@
+# Scripts e configs precisam de LF para rodar em Linux (containers, runners, kind),
+# inclusive quando o repositório é clonado no Windows.
+* text=auto eol=lf
+*.png binary
+*.jpeg binary

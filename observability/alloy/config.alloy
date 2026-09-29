@@ -1,0 +1,65 @@
+// Coleta de logs dos containers do projeto Compose "realworld" e envio para o Loki.
+// Alloy é o sucessor do Promtail (que entrou em fim de vida), por isso a escolha.
+
+// 1) Descobre só os containers deste projeto, não tudo que roda no Docker da máquina.
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=realworld"]
+  }
+}
+
+// 2) Labels de baixa cardinalidade: serviço e container. Nada de path, usuário ou id aqui.
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  forward_to    = [loki.process.api.receiver]
+}
+
+// 3) A API loga em JSON: "level" vira label (poucos valores possíveis) para filtrar erros
+//    rápido. Os demais campos (status, route, duration_ms) ficam no corpo e são extraídos
+//    na consulta com "| json", sem inflar o índice do Loki.
+loki.process "api" {
+  stage.match {
+    selector = "{service=\"api\"}"
+
+    stage.json {
+      expressions = { level = "level" }
+    }
+
+    stage.labels {
+      values = { level = "" }
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

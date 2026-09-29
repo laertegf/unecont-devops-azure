@@ -1,0 +1,25 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  # Descoberta por DNS do Compose: com "docker compose up --scale api=3"
+  # o Prometheus passa a coletar de todas as réplicas sem mudar configuração.
+  - job_name: realworld-api
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["api"]
+        type: A
+        port: 3000
+        refresh_interval: 15s
+    relabel_configs:
+      - target_label: env
+        replacement: local
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: alloy
+    static_configs:
+      - targets: ["alloy:12345"]

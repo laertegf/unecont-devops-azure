@@ -23,3 +23,7 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+    # Major de dependência da aplicação é decisão do time de dev, não de bot.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

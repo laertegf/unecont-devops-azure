@@ -166,7 +166,7 @@ jobs:
           cp .env.example .env
           API_IMAGE="$CI_IMAGE" docker compose --profile observability up -d --no-build
           # "migrate" termina de propósito (exit 0), então espero pela readiness da API em vez de --wait.
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             curl -fsS http://localhost:3000/readyz && exit 0
             sleep 3
           done
@@ -183,7 +183,7 @@ jobs:
 
       - name: Logs chegaram no Loki
         run: |
-          for i in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             n=$(curl -fsS -G http://localhost:3100/loki/api/v1/query \
                   --data-urlencode 'query=count_over_time({service="api"}[10m])' \
                 | grep -o '"value":\[[^]]*\]' | wc -l)
@@ -194,7 +194,7 @@ jobs:
 
       - name: Métrica chegou no Prometheus
         run: |
-          for i in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             if curl -fsS 'http://localhost:9090/api/v1/query?query=http_requests_total' | grep -q '"__name__":"http_requests_total"'; then
               echo "Prometheus coletando http_requests_total"; exit 0
             fi
@@ -243,7 +243,7 @@ jobs:
 
       - name: HPA lendo métricas
         run: |
-          for i in $(seq 1 24); do
+          for _ in $(seq 1 24); do
             cur=$(kubectl -n realworld get hpa api -o jsonpath='{.status.currentMetrics[0].resource.current.averageUtilization}')
             [ -n "$cur" ] && { echo "HPA ativo: CPU em ${cur}% do request"; exit 0; }
             sleep 5

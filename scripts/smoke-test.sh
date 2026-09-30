@@ -41,8 +41,10 @@ curl -fsS -X POST "$BASE/api/articles" -H 'Content-Type: application/json' -H "A
   >/dev/null || die
 ok
 
+# Autenticado: a listagem anônima só traz artigos de autores "demo"; os do próprio usuário
+# entram quando a requisição leva o token.
 step "GET /api/articles contém o artigo criado"
-body=$(curl -fsS "$BASE/api/articles?author=$USERNAME") || die
+body=$(curl -fsS -H "Authorization: Token $TOKEN" "$BASE/api/articles?author=$USERNAME") || die
 grep -q "$TITLE" <<<"$body" || die
 ok
 

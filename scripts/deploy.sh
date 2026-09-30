@@ -105,6 +105,7 @@ if [[ "$PREV_IMAGE" == "$IMAGE" ]]; then
 fi
 
 # Seletor do Deployment, para achar os pods dele no diagnóstico.
+# shellcheck disable=SC2016  # $k e $v são variáveis do go-template, não do shell
 SELECTOR=$("${KUBECTL[@]}" get deployment "$DEPLOYMENT" \
   -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}')
 SELECTOR="${SELECTOR%,}"

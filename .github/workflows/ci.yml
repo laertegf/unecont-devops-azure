@@ -65,7 +65,7 @@ jobs:
         run: npx nx test api --ci --testPathIgnorePatterns=auth.service.test.ts
 
       # A suíte AuthService do upstream tem 4 testes com mock incompleto do Prisma: falham
-      # mesmo com banco real (issue #1). Ficam em quarentena: continuam rodando e aparecem
+      # mesmo com banco real (issue #4). Ficam em quarentena: continuam rodando e aparecem
       # no log, mas não bloqueiam o PR até o time de desenvolvimento corrigir os testes.
       - name: Testes em quarentena (AuthService, informativo)
         continue-on-error: true

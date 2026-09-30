@@ -60,13 +60,19 @@ ENV NODE_ENV=production \
     CHECKPOINT_DISABLE=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=1
 
-# Arquivos ficam com dono root e o processo roda como "node" (uid 1000): a aplicação não
+# A imagem base traz npm/npx/corepack, que a API não usa em runtime (o Prisma é chamado pelo
+# binário direto). Fora da imagem: menos superfície de ataque e menos CVE no scan.
+RUN rm -rf /usr/local/lib/node_modules /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
+
+# Arquivos ficam com dono root e o processo roda como uid 1000 ("node"): a aplicação não
 # consegue alterar o próprio código, o que combina com readOnlyRootFilesystem no Kubernetes.
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=prod-deps /app/prisma ./prisma
 COPY --from=build /app/dist/api ./
 
-USER node
+# uid numérico (e não "node"): o Kubernetes valida runAsNonRoot pelo número, sem precisar
+# resolver o nome dentro da imagem.
+USER 1000:1000
 EXPOSE 3000
 
 # Usado pelo Docker/Compose. No Kubernetes quem manda são as probes do Deployment.

@@ -76,11 +76,12 @@ Se der tempo, abrir um PR ao vivo (uma linha no README) e mostrar os checks roda
 Grafana → dashboard **RealWorld API**:
 
 ```bash
-for i in $(seq 1 200); do curl -s -o /dev/null localhost:3000/api/articles; done   # tráfego
-docker compose stop postgres
-for i in $(seq 1 20); do curl -s -o /dev/null localhost:3000/api/tags; done         # gera 500
-docker compose start postgres
+scripts/error-demo.sh          # tráfego normal → banco fora (500, /readyz 503) → banco de volta
+scripts/error-demo.sh --kind   # a mesma coisa no cluster: o painel de réplicas prontas cai e volta
 ```
+
+O script mostra o código HTTP de cada requisição no terminal (200 → 500 → 200) e religa o
+banco sozinho, inclusive se for interrompido.
 
 - painéis de taxa de 5xx e logs de erro subindo;
 - Explore → Loki: `{service="api"} | json | status >= 500`;

@@ -22,7 +22,7 @@ log() { printf '\n==> %s\n' "$*"; }
 USE_LOCAL=false
 [[ "${1:-}" == "--local" ]] && USE_LOCAL=true
 
-for bin in docker kind kubectl; do
+for bin in docker kind kubectl curl; do
   command -v "$bin" >/dev/null || { echo "ERRO: $bin não encontrado no PATH" >&2; exit 1; }
 done
 
@@ -72,6 +72,15 @@ log "aguardando Postgres e API ficarem prontos"
 kubectl -n "$NAMESPACE" rollout status statefulset/postgres --timeout=180s
 kubectl -n "$NAMESPACE" rollout status deployment/api --timeout=300s
 kubectl -n kube-system rollout status deployment/metrics-server --timeout=120s
+
+# Pod Ready não significa rota pronta: o kube-proxy ainda programa o NodePort por alguns
+# segundos depois do rollout, e a primeira requisição pode levar "connection reset".
+log "aguardando o NodePort responder em http://localhost:8080"
+for _ in $(seq 1 30); do
+  curl -fsS http://localhost:8080/healthz >/dev/null 2>&1 && break
+  sleep 2
+done
+curl -fsS http://localhost:8080/healthz >/dev/null || { echo "ERRO: NodePort não respondeu em 60s" >&2; exit 1; }
 
 log "estado final"
 kubectl -n "$NAMESPACE" get pods -o wide

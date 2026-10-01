@@ -53,9 +53,12 @@ body=$(curl -fsS "$BASE/api/tags") || die
 grep -q '"tags"' <<<"$body" || die
 ok
 
+# Com várias réplicas atrás de um Service, o /metrics pode cair numa réplica que ainda
+# não atendeu nenhuma requisição contada: o counter existe (linha "# TYPE") mas não tem
+# série. A prova de que a métrica está exposta é a declaração, não a amostra.
 step "GET /metrics expõe http_requests_total"
 body=$(curl -fsS "$BASE/metrics") || die
-grep -q '^http_requests_total' <<<"$body" || die
+grep -qE '^(# TYPE )?http_requests_total' <<<"$body" || die
 ok
 
 echo "==> tudo certo"

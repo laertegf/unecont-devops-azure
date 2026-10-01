@@ -7,7 +7,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "10s",
   "time": {
     "from": "now-30m",
@@ -16,6 +16,170 @@
   "editable": false,
   "graphTooltip": 1,
   "panels": [
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Réplicas da API prontas no kind",
+      "description": "Pods da API no cluster kind que passaram na readiness probe. Sobe com o HPA e cai quando o banco sai do ar.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-kind"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-kind"
+          },
+          "expr": "count(up{job=\"kind-api\", app=\"realworld-api\", ready=\"true\"} == 1) or vector(0)",
+          "instant": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 2
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Réplicas da API no kind: prontas × existentes (HPA de 2 a 6)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus-kind"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 18,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-kind"
+          },
+          "expr": "count(up{job=\"kind-api\", app=\"realworld-api\", ready=\"true\"} == 1) or vector(0)",
+          "legendFormat": "prontas",
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus-kind"
+          },
+          "expr": "count(up{job=\"kind-api\", app=\"realworld-api\"}) or vector(0)",
+          "legendFormat": "existentes",
+          "instant": false
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 12,
+            "showPoints": "never"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "prontas"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "existentes"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
     {
       "id": 1,
       "type": "stat",
@@ -26,7 +190,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 0,
+        "y": 5,
         "w": 6,
         "h": 4
       },
@@ -83,7 +247,7 @@
       },
       "gridPos": {
         "x": 6,
-        "y": 0,
+        "y": 5,
         "w": 6,
         "h": 4
       },
@@ -148,7 +312,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 0,
+        "y": 5,
         "w": 6,
         "h": 4
       },
@@ -213,7 +377,7 @@
       },
       "gridPos": {
         "x": 18,
-        "y": 0,
+        "y": 5,
         "w": 6,
         "h": 4
       },
@@ -274,7 +438,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 9,
         "w": 12,
         "h": 8
       },
@@ -319,7 +483,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 4,
+        "y": 9,
         "w": 12,
         "h": 8
       },
@@ -382,7 +546,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 12,
+        "y": 17,
         "w": 8,
         "h": 8
       },
@@ -427,7 +591,7 @@
       },
       "gridPos": {
         "x": 8,
-        "y": 12,
+        "y": 17,
         "w": 8,
         "h": 8
       },
@@ -472,7 +636,7 @@
       },
       "gridPos": {
         "x": 16,
-        "y": 12,
+        "y": 17,
         "w": 8,
         "h": 8
       },
@@ -517,7 +681,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 20,
+        "y": 25,
         "w": 24,
         "h": 6
       },
@@ -607,7 +771,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 26,
+        "y": 31,
         "w": 24,
         "h": 9
       },
@@ -638,7 +802,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 40,
         "w": 24,
         "h": 12
       },

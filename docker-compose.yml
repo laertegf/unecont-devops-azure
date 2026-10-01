@@ -135,6 +135,10 @@ services:
       - grafana-data:/var/lib/grafana
     ports:
       - "3001:3000"
+    # Para o datasource "Prometheus (kind)" alcançar o port-forward no host.
+    # No Docker Desktop o nome já existe; no Linux o host-gateway o cria.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - prometheus
       - loki

@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Prometheus dentro do cluster, só para o ambiente local: descobre os pods da API pela
+# anotação prometheus.io/scrape e alimenta o painel "Réplicas da API no kind" do Grafana
+# (que roda no Compose e chega aqui por kubectl port-forward, ver scripts/monitoring-up.sh).
+# Em produção: Azure Monitor managed Prometheus ou kube-prometheus-stack.
+
+namespace: monitoring
+
+resources:
+  - namespace.yaml
+  - prometheus.yaml

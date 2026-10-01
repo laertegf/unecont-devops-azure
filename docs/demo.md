@@ -8,11 +8,16 @@ Comandos na ordem em que aparecem na apresentação. Tudo em bash (Git Bash no W
 cp -n .env.example .env
 docker compose --profile observability up -d --build   # sobe tudo e aquece o cache
 scripts/kind-up.sh                                     # cluster pronto antes de começar
+scripts/monitoring-up.sh                               # Prometheus no kind + port-forward: painel de réplicas no Grafana
 scripts/smoke-test.sh http://localhost:3000            # gera tráfego para o dashboard
 ```
 
 Abas abertas: README no GitHub, aba Actions (último run do CI e do CD), pacote no GHCR,
-Grafana (http://localhost:3001) com o dashboard RealWorld API, terminal.
+Grafana (http://localhost:3001) com o dashboard RealWorld API, a API respondendo
+(http://localhost:3000/api/articles) e dois terminais Git Bash.
+
+A aplicação não tem interface: "aplicação rodando" é o JSON no navegador e o smoke test
+criando usuário e artigo ao vivo.
 
 ## 1. Visão geral e decisões (5 min)
 
@@ -45,7 +50,7 @@ kubectl -n realworld describe deploy api | sed -n '/Liveness/,/Environment/p'
 kubectl -n realworld logs deploy/api -c migrate   # initContainer de migração
 curl -s localhost:8080/readyz; echo
 
-# HPA: em outro terminal
+# HPA: em outro terminal. No Grafana, o painel "Réplicas da API prontas no kind" acompanha.
 scripts/load-test.sh 8 150
 kubectl -n realworld get hpa api --watch
 
@@ -98,6 +103,7 @@ Tabela "Em produção, o que eu faria diferente (Azure)" do README.
 ## Depois
 
 ```bash
+scripts/monitoring-up.sh --stop
 docker compose --profile observability down -v
 scripts/kind-down.sh
 ```

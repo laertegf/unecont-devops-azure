@@ -15,3 +15,14 @@ datasources:
     type: loki
     access: proxy
     url: http://loki:3100
+
+  # Prometheus que roda dentro do cluster kind (k8s/monitoring), alcançado pelo
+  # port-forward aberto por scripts/monitoring-up.sh. Sem o cluster, o datasource
+  # só fica indisponível; o resto do dashboard não depende dele.
+  - name: Prometheus (kind)
+    uid: prometheus-kind
+    type: prometheus
+    access: proxy
+    url: http://host.docker.internal:9091
+    jsonData:
+      timeInterval: 10s

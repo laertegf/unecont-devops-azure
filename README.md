@@ -173,7 +173,22 @@ No Alloy, só `level` vira label do Loki (poucos valores possíveis); status, ro
 extraídos na consulta com `| json`.
 
 O dashboard traz requisições/s, taxa de 5xx, latência p50/p95/p99, memória, CPU, event loop lag, volume de
-logs por nível, erros e o stream de logs. Para ver os erros acontecendo:
+logs por nível, erros e o stream de logs.
+
+**Réplicas do kind no mesmo Grafana.** O Prometheus do Compose só vê a API do Compose. Para o dashboard mostrar
+quantas réplicas estão prontas no cluster, um Prometheus pequeno roda dentro do kind ([`k8s/monitoring`](k8s/monitoring)),
+descobre os pods pela anotação `prometheus.io/scrape` e guarda o estado da readiness no label `ready`. O Grafana
+chega nele pelo datasource "Prometheus (kind)" via `kubectl port-forward`:
+
+```bash
+scripts/monitoring-up.sh          # aplica k8s/monitoring e abre o port-forward em localhost:9091
+scripts/monitoring-up.sh --stop
+```
+
+Os dois painéis do topo ("Réplicas da API prontas no kind" e "prontas × existentes") acompanham o HPA
+escalando e a readiness tirando pods do Service quando o banco cai.
+
+Para ver os erros acontecendo:
 
 ```bash
 docker compose stop postgres     # API passa a responder 500 e /readyz 503
@@ -232,9 +247,10 @@ Só o necessário para operar a API em container e Kubernetes (`src/main.ts` e `
 ├── k8s/
 │   ├── kind-cluster.yaml
 │   ├── base/                 # namespace, postgres, deployment, service, hpa, pdb, networkpolicy
-│   └── overlays/kind/        # NodePort + secretGenerator
+│   ├── overlays/kind/        # NodePort + secretGenerator
+│   └── monitoring/           # Prometheus dentro do kind (réplicas no Grafana)
 ├── observability/            # prometheus, loki, alloy, grafana (datasources + dashboard)
-├── scripts/                  # deploy.sh, kind-up.sh, kind-down.sh, load-test.sh, smoke-test.sh
+├── scripts/                  # deploy.sh, kind-up.sh, kind-down.sh, monitoring-up.sh, load-test.sh, smoke-test.sh
 ├── .github/workflows/        # ci.yml, cd.yml
 ├── docs/demo.md              # roteiro da apresentação
 └── src/                      # aplicação (upstream RealWorld + observabilidade)

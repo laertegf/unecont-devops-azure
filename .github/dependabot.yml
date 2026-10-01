@@ -27,3 +27,6 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # esbuild ainda é 0.x: cada minor é quebra de compatibilidade. A versão é
+      # travada pelo peer dependency do @nx/esbuild (~0.19) e sobe junto com o Nx.
+      - dependency-name: "esbuild"

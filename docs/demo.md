@@ -1,4 +1,4 @@
-# Roteiro da demo (40 min)
+# Roteiro da demo (30 min)
 
 Comandos na ordem em que aparecem na apresentação. Tudo em bash (Git Bash no Windows), na raiz do repositório.
 
@@ -19,7 +19,7 @@ Grafana (http://localhost:3001) com o dashboard RealWorld API, a API respondendo
 A aplicação não tem interface: "aplicação rodando" é o JSON no navegador e o smoke test
 criando usuário e artigo ao vivo.
 
-## 1. Visão geral e decisões (5 min)
+## 1. Visão geral e decisões (3 min)
 
 README no GitHub: diagrama e tabela de entregas. Três decisões para destacar:
 
@@ -27,7 +27,7 @@ README no GitHub: diagrama e tabela de entregas. Três decisões para destacar:
 2. liveness não checa o banco, readiness checa;
 3. o CI testa o próprio script de deploy, inclusive o rollback.
 
-## 2. Docker (7 min)
+## 2. Docker (4 min)
 
 ```bash
 # Dockerfile: estágios build → prod-deps → runtime
@@ -40,7 +40,7 @@ scripts/smoke-test.sh http://localhost:3000
 curl -s localhost:3000/api/articles | head -c 300; echo
 ```
 
-## 3. Kubernetes (8 min)
+## 3. Kubernetes (7 min)
 
 ```bash
 kubectl get nodes
@@ -60,7 +60,7 @@ kubectl -n realworld get pods -w                  # READY 0/1, RESTARTS continua
 kubectl -n realworld scale sts postgres --replicas=1
 ```
 
-## 4. Pipeline (7 min)
+## 4. Pipeline (5 min)
 
 No GitHub, aba Actions:
 
@@ -71,7 +71,7 @@ No GitHub, aba Actions:
 
 Se der tempo, abrir um PR ao vivo (uma linha no README) e mostrar os checks rodando.
 
-## 5. Observabilidade (6 min)
+## 5. Observabilidade (4 min)
 
 Grafana → dashboard **RealWorld API**:
 
@@ -97,7 +97,7 @@ echo $?                                                                     # 2
 kubectl -n realworld rollout history deploy/api
 ```
 
-## 7. Produção real (3 min)
+## 7. Produção real e perguntas (3 min)
 
 Tabela "Em produção, o que eu faria diferente (Azure)" do README.
 

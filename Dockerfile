@@ -15,8 +15,11 @@ ARG NODE_IMAGE=node:22.23.3-slim
 FROM ${NODE_IMAGE} AS base
 # openssl: exigido pelos engines do Prisma. Sem pin de versão: vem do repositório da própria base,
 # que já está fixada pela tag acima.
+# O "upgrade" aplica os patches de segurança do Debian que a imagem base ainda não incorporou:
+# a tag do node é rebuildada com atraso em relação ao repositório, e o Trivy bloqueia CRITICAL.
 # hadolint ignore=DL3008
 RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends openssl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app

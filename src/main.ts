@@ -6,6 +6,7 @@ import HttpException from './app/models/http-exception.model';
 import prisma from './prisma/prisma-client';
 import health, { markShuttingDown } from './app/observability/health';
 import { httpObservability } from './app/observability/metrics';
+import { faultInjection } from './app/observability/fault';
 import { log } from './app/observability/logger';
 
 const app = express();
@@ -17,6 +18,7 @@ const app = express();
 app.disable('x-powered-by');
 app.use(httpObservability);
 app.use(health);
+app.use(faultInjection()); // no-op unless CHAOS_ERROR_RATE is set (pipeline tests only)
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));

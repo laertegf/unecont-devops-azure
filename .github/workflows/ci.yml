@@ -5,7 +5,8 @@
 #   app          build, testes (com Postgres de verdade) e lint do código
 #   infra-lint   Dockerfile, shell scripts, manifests Kubernetes, Compose e os próprios workflows
 #   compose-e2e  builda a imagem, escaneia vulnerabilidades e sobe o docker-compose com smoke test
-#   kind-e2e     sobe um cluster kind, aplica os manifests e testa o deploy.sh (sucesso e rollback)
+#   kind-e2e     sobe um cluster kind, aplica os manifests e testa o deploy.sh (sucesso, rollback por
+#                readiness, rollback por taxa de erro e escolha da versão comprovada)
 name: CI
 
 on:
@@ -250,22 +251,69 @@ jobs:
           done
           kubectl -n realworld describe hpa api; exit 1
 
-      - name: deploy.sh publica uma versão nova
+      # O deploy.sh verifica a versão nova pelo Prometheus que roda dentro do kind.
+      - name: Prometheus no kind (fonte da verificação pós-deploy)
+        run: scripts/monitoring-up.sh
+
+      - name: deploy.sh publica uma versão nova e a registra como comprovada
         run: |
           docker tag "$CI_IMAGE" realworld-api:ci-v2
           kind load docker-image realworld-api:ci-v2 --name realworld
-          scripts/deploy.sh realworld-api:ci-v2 -t 180s
+          scripts/deploy.sh realworld-api:ci-v2 -t 180s -u http://localhost:8080 -p http://localhost:9091 -w 30
+          good=$(kubectl -n realworld get deploy api -o jsonpath='{.metadata.annotations.deploy\.realworld\.io/last-good-image}')
+          echo "última versão comprovada: $good"
+          test "$good" = "realworld-api:ci-v2"
 
-      - name: deploy.sh faz rollback de uma imagem quebrada
+      # Caso que a readiness não pega: a versão sobe, fica Ready e responde 500.
+      - name: deploy.sh reprova uma versão que sobe mas erra (rollback por taxa de erro)
+        run: |
+          printf 'FROM %s\nENV CHAOS_ERROR_RATE=0.3\n' "$CI_IMAGE" | docker build -t realworld-api:ci-faulty -f - .
+          kind load docker-image realworld-api:ci-faulty --name realworld
+          set +e
+          scripts/deploy.sh realworld-api:ci-faulty -t 180s -u http://localhost:8080 -p http://localhost:9091 -w 30
+          rc=$?
+          set -e
+          echo "exit code: $rc (esperado 2 = reprovado na verificação e rollback OK)"
+          test "$rc" -eq 2
+          img=$(kubectl -n realworld get deploy api -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "imagem no ar depois do rollback: $img"
+          test "$img" = "realworld-api:ci-v2"
+
+      - name: deploy.sh faz rollback de uma imagem que nem sobe (ImagePullBackOff)
         run: |
           set +e
-          scripts/deploy.sh realworld-api:nao-existe -t 60s
+          scripts/deploy.sh realworld-api:nao-existe -t 60s -u http://localhost:8080 -p http://localhost:9091
           rc=$?
           set -e
           echo "exit code: $rc (esperado 2 = rollback OK)"
           test "$rc" -eq 2
           img=$(kubectl -n realworld get deploy api -o jsonpath='{.spec.template.spec.containers[0].image}')
           echo "imagem no ar depois do rollback: $img"
+          test "$img" = "realworld-api:ci-v2"
+
+      # Alguém publica uma versão ruim por fora do pipeline. Ela fica Ready e vira "a anterior";
+      # um rollback ingênuo voltaria para ela. O script volta para a última comprovada.
+      - name: Rollback vai para a versão comprovada, não para "a anterior"
+        run: |
+          kubectl -n realworld set image deploy/api api=realworld-api:ci-faulty migrate=realworld-api:ci-faulty
+          kubectl -n realworld rollout status deploy/api --timeout=180s
+          set +e
+          scripts/deploy.sh realworld-api:nao-existe -t 60s -u http://localhost:8080 -p http://localhost:9091
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          img=$(kubectl -n realworld get deploy api -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "no ar depois do rollback: $img (a anterior era realworld-api:ci-faulty)"
+          test "$img" = "realworld-api:ci-v2"
+
+      # Rollback também é deploy: volta para a comprovada passando pela mesma verificação.
+      - name: deploy.sh --rollback volta para a versão comprovada e a verifica de novo
+        run: |
+          kubectl -n realworld set image deploy/api api=realworld-api:ci-faulty migrate=realworld-api:ci-faulty
+          kubectl -n realworld rollout status deploy/api --timeout=180s
+          scripts/deploy.sh --rollback -u http://localhost:8080 -p http://localhost:9091 -w 30
+          img=$(kubectl -n realworld get deploy api -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "no ar depois do --rollback: $img"
           test "$img" = "realworld-api:ci-v2"
 
       - name: Diagnóstico (em caso de falha)

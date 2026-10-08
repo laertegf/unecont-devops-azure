@@ -10,7 +10,7 @@
 #
 # Opções (padrões entre parênteses):
 #   -n namespace (realworld)   -d deployment (api)   -c containers (api,migrate)
-#   -t timeout do rollout (120s)
+#   -s service que expõe o deployment (api)   -t timeout do rollout (120s)
 #   -u URL da API para smoke test e tráfego de verificação (http://localhost:8080; "" desliga)
 #   -p URL do Prometheus que coleta os pods (http://localhost:9091; "" desliga a análise)
 #   -w janela de verificação, em segundos (60)
@@ -67,6 +67,7 @@ set -Eeuo pipefail
 
 NAMESPACE="realworld"
 DEPLOYMENT="api"
+SERVICE="api"
 CONTAINERS="api,migrate"
 TIMEOUT="120s"
 URL="http://localhost:8080"
@@ -99,10 +100,11 @@ case "$1" in
   *) IMAGE="$1" ;;
 esac
 shift
-while getopts ":n:d:c:t:u:p:w:e:l:h" opt; do
+while getopts ":n:d:s:c:t:u:p:w:e:l:h" opt; do
   case "$opt" in
     n) NAMESPACE="$OPTARG" ;;
     d) DEPLOYMENT="$OPTARG" ;;
+    s) SERVICE="$OPTARG" ;;
     c) CONTAINERS="$OPTARG" ;;
     t) TIMEOUT="$OPTARG" ;;
     u) URL="$OPTARG"; URL_EXPLICIT=true ;;
@@ -162,6 +164,28 @@ traffic() {
     done
     sleep 0.2
   done
+}
+
+# Hash do ReplicaSet da revisão atual do Deployment (é o que identifica os pods da versão).
+current_hash() { replicasets | awk -v r="$(revision)" '$1 == r {print $2}'; }
+
+# "rollout status" termina quando os pods novos estão prontos, mas os antigos ainda drenam por
+# alguns segundos (preStop) e o kube-proxy demora a reprogramar o Service. Testar ou medir nesse
+# intervalo misturaria as duas versões, e um rollback de uma versão com erro pegaria 500 dela.
+# Espera o Service só ter endpoints prontos do ReplicaSet informado.
+wait_switch() {
+  local hash=$1 pods
+  for _ in $(seq 1 30); do
+    pods=$("${KUBECTL[@]}" get endpointslices -l "kubernetes.io/service-name=$SERVICE" \
+      -o jsonpath='{range .items[*].endpoints[*]}{.conditions.ready}{" "}{.targetRef.name}{"\n"}{end}' 2>/dev/null \
+      | awk '$1 == "true" {print $2}') || return 0
+    if [[ -n "$pods" ]] && ! grep -qvE "^${DEPLOYMENT}-${hash}-" <<<"$pods"; then
+      sleep 2  # folga para o kube-proxy aplicar a mudança
+      return 0
+    fi
+    sleep 1
+  done
+  warn "service/$SERVICE ainda tem endpoints de outra versão depois de 30s; seguindo mesmo assim"
 }
 
 smoke() {
@@ -289,8 +313,9 @@ if $ROLLOUT_OK; then
   migrations_report
 
   # Só os pods do ReplicaSet novo entram na conta: é a versão nova que está em julgamento.
-  NEW_HASH=$(replicasets | awk -v r="$NEW_REVISION" '$1 == r {print $2}')
+  NEW_HASH=$(current_hash)
   POD_RE="${DEPLOYMENT}-${NEW_HASH}-.*"
+  wait_switch "$NEW_HASH"
 
   [[ -n "$URL" ]] && smoke
 
@@ -380,6 +405,7 @@ fi
 
 if "${KUBECTL[@]}" rollout status "deployment/$DEPLOYMENT" --timeout="$TIMEOUT"; then
   if [[ -n "$URL" ]]; then
+    wait_switch "$(current_hash)"
     smoke
     [[ "$SMOKE" == ok ]] || { log "ROLLBACK FALHOU: $TARGET voltou mas o smoke test reprovou: $SMOKE"; exit 3; }
   fi

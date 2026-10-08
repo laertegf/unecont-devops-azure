@@ -89,13 +89,27 @@ banco sozinho, inclusive se for interrompido.
 
 ## 6. Script (4 min)
 
+Antes: uma imagem local "que sobe mas erra", derivada da imagem normal:
+
 ```bash
-kubectl -n realworld rollout history deploy/api
-scripts/deploy.sh ghcr.io/laertegf/unecont-devops-azure:sha-<commit>        # sucesso
-scripts/deploy.sh ghcr.io/laertegf/unecont-devops-azure:nao-existe -t 45s   # ImagePullBackOff → rollback
-echo $?                                                                     # 2
-kubectl -n realworld rollout history deploy/api
+printf 'FROM ghcr.io/laertegf/unecont-devops-azure:main\nENV CHAOS_ERROR_RATE=0.3\n' \
+  | docker build -t realworld-api:com-falha -f - .
+kind load docker-image realworld-api:com-falha --name realworld
 ```
+
+Na demo (Prometheus do kind já de pé pelo `monitoring-up.sh`):
+
+```bash
+scripts/deploy.sh ghcr.io/laertegf/unecont-devops-azure:sha-<commit> -w 30   # aprovada → last-good
+scripts/deploy.sh realworld-api:com-falha -w 30                              # Ready, mas 5xx acima do limite → rollback
+echo $?                                                                      # 2
+kubectl -n realworld get deploy api -o jsonpath='{.metadata.annotations}'    # last-good-image continua a boa
+```
+
+O que dizer: readiness aprovou a versão com falha; quem reprovou foi a taxa de 5xx medida só nos pods
+novos. E o rollback não foi para "a anterior": foi para a última que passou nessa mesma verificação.
+Se perguntarem do banco: o script lista as migrações que entraram e avisa; sem expand/contract não há
+rollback automático de schema, e isso é regra de desenvolvimento, não de ferramenta ([`docs/rollback.md`](rollback.md)).
 
 ## 7. Produção real e perguntas (3 min)
 

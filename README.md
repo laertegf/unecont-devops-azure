@@ -134,7 +134,7 @@ kubectl -n realworld get hpa api --watch
 | App | build, testes unitários com **Postgres real** como service container, migrations, lint do código novo (bloqueia) e do herdado (informativo) |
 | Lint de infraestrutura | hadolint (Dockerfile), shellcheck (scripts), actionlint (workflows), `docker compose config`, kustomize + kubeconform (manifests) |
 | Imagem + Compose e2e | build, Trivy (bloqueia CRITICAL com correção), sobe o Compose com observabilidade, smoke test, confere não-root, confere que logs chegaram no Loki e métricas no Prometheus |
-| Kubernetes e2e | cluster kind no runner, deploy com o mesmo `kind-up.sh`, smoke test, HPA lendo métricas, **`deploy.sh` testado nos dois caminhos: sucesso e rollback automático** |
+| Kubernetes e2e | cluster kind no runner, deploy com o mesmo `kind-up.sh`, smoke test, HPA lendo métricas, Prometheus no kind, **`deploy.sh` em quatro cenários: aprovado, reprovado por taxa de erro, imagem que não sobe, e rollback para a versão comprovada em vez da "anterior"** |
 
 **[CD](.github/workflows/cd.yml)**: push na `main` roda o CI inteiro e só então publica no GHCR:
 
@@ -196,23 +196,40 @@ curl -s localhost:3000/api/tags
 docker compose start postgres
 ```
 
-## 5. Script de automação: deploy com rollback automático
+## 5. Script de automação: deploy verificado, rollback para a versão comprovada
 
-[`scripts/deploy.sh`](scripts/deploy.sh) publica uma imagem num Deployment, espera o rollout e, se falhar,
-volta para a revisão que estava no ar. As decisões estão comentadas no próprio script.
+[`scripts/deploy.sh`](scripts/deploy.sh) publica uma imagem num Deployment, espera o rollout, **verifica a
+versão nova em serviço** e, se qualquer etapa falhar, volta para a **última versão comprovadamente boa**,
+não para "a anterior". O raciocínio completo está em [`docs/rollback.md`](docs/rollback.md); as decisões,
+comentadas no próprio script.
 
 ```bash
-scripts/deploy.sh ghcr.io/laertegf/unecont-devops-azure:sha-<commit>   # deploy normal
-scripts/deploy.sh ghcr.io/laertegf/unecont-devops-azure:nao-existe -t 60s   # falha → rollback
-kubectl -n realworld rollout history deployment/api
+scripts/monitoring-up.sh                                                    # Prometheus no kind: é quem mede a versão nova
+scripts/deploy.sh ghcr.io/laertegf/unecont-devops-azure:sha-<commit>        # deploy + verificação → registrada como boa
+scripts/deploy.sh ghcr.io/laertegf/unecont-devops-azure:nao-existe -t 60s   # não sobe → rollback
+scripts/deploy.sh realworld-api:com-falha -w 30                             # sobe Ready mas erra → rollback
+scripts/deploy.sh --rollback                                                # volta para a última comprovada, com verificação
+kubectl -n realworld get deploy api -o jsonpath='{.metadata.annotations}'   # last-good-image / revision / at
 ```
 
-- O sucesso é decidido pelo `kubectl rollout status`, que só termina quando as réplicas novas passam na
-  readiness probe. As probes são o teste de saúde do deploy.
-- O rollback usa `--to-revision` com a revisão anotada **antes** do deploy, e não um `undo` cego.
-- Diagnóstico (motivo de espera dos pods e eventos de Warning) é coletado **antes** do rollback, senão se perde.
-- Códigos de saída distintos para o pipeline: `0` ok, `1` pré-condição, `2` falhou e voltou, `3` falhou e não voltou.
-- Atualiza API e initContainer de migração juntos (mesmo artefato).
+Por que "voltar a imagem anterior" não basta, e o que o script faz no lugar:
+
+| Buraco do rollback comum | Resposta do script |
+|---|---|
+| **Alvo**: a anterior pode ser tão ruim quanto a atual (dois deploys ruins seguidos, `set image` na mão) | só registra como boa (`deploy.realworld.io/last-good-*`) a versão que passou na verificação; o rollback volta para ela, por revisão ou por imagem |
+| **Gatilho**: readiness só pega pod que nem sobe; versão Ready que devolve 500 fica no ar | após o rollout: smoke test + janela medindo no Prometheus a taxa de 5xx e o p95 **só dos pods da versão nova** (filtro pelo hash do ReplicaSet); limites `-e` e `-l` |
+| **Banco**: rollback de imagem não desfaz migração, e o Prisma não tem "down" | compara `_prisma_migrations` antes e depois; no rollback lista o que entrou e avisa que a versão antiga passa a rodar sobre o schema novo (seguro só com expand/contract) |
+| Rollback é tratado como "desfazer", não como deploy | `--rollback` passa pela mesma verificação: voltar para uma versão que já não funciona é um deploy ruim como outro |
+
+Ainda valem: timeout explícito do rollout, diagnóstico coletado **antes** do rollback, API e initContainer
+de migração atualizados juntos, códigos de saída para o pipeline (`0` aprovado, `1` pré-condição, `2` reprovado
+e voltou, `3` reprovado e não voltou). Sem Prometheus ou sem amostra suficiente, a versão fica no ar mas não
+é registrada como boa: não se aprova o que não se mediu.
+
+A versão que "sobe mas erra" existe de propósito para testar o pipeline: a variável `CHAOS_ERROR_RATE`
+([`src/app/observability/fault.ts`](src/app/observability/fault.ts)) faz a API responder 500 numa fração das
+chamadas em `/api`, sem tocar nas probes. O CI builda uma imagem derivada com ela e confere que o script
+reprova e volta para a comprovada, inclusive no cenário em que "a anterior" é uma versão ruim publicada por fora.
 
 ## Mudanças na aplicação
 
@@ -232,7 +249,7 @@ Só o necessário para operar a API em container e Kubernetes (`src/main.ts` e `
 | Secret gerado localmente | **Azure Key Vault** + Secrets Store CSI Driver, autenticação por **Workload Identity** |
 | GHCR | **ACR** com integração ao AKS, geo-replicação e quarentena/scan (Defender for Containers) |
 | `kubectl` no pipeline | **GitOps** (Argo CD ou Flux) com promoção dev → hml → prod por PR; GitHub Actions autenticando no Azure por **OIDC** (sem client secret) |
-| rollout do Deployment | canary/blue-green com Argo Rollouts ou Flagger, analisando métricas de erro/latência |
+| verificação pós-rollout no `deploy.sh` | **Argo Rollouts** ou Flagger: canário com divisão de tráfego e AnalysisTemplate no Prometheus (o script é a versão manual disso, sem canário) |
 | NodePort | Application Gateway for Containers ou ingress gerenciado, TLS com cert-manager, WAF |
 | Stack no Compose | **Azure Monitor managed Prometheus + Azure Managed Grafana**, ou a mesma stack LGTM no cluster com Loki em Blob Storage; alertas por SLO (taxa de erro, p95) |
 | Segurança | políticas de admissão (Azure Policy/Kyverno) exigindo imagem assinada e do registry interno, imagem distroless, NetworkPolicy default-deny |
@@ -252,6 +269,6 @@ Só o necessário para operar a API em container e Kubernetes (`src/main.ts` e `
 ├── observability/            # prometheus, loki, alloy, grafana (datasources + dashboard)
 ├── scripts/                  # deploy.sh, kind-up.sh, kind-down.sh, monitoring-up.sh, load-test.sh, smoke-test.sh
 ├── .github/workflows/        # ci.yml, cd.yml
-├── docs/demo.md              # roteiro da apresentação
+├── docs/                     # demo.md (roteiro da apresentação), rollback.md (por que não basta voltar a imagem anterior)
 └── src/                      # aplicação (upstream RealWorld + observabilidade)
 ```
